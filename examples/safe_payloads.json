@@ -1,0 +1,46 @@
+[
+  {
+    "name": "Normal Chat Response",
+    "description": "Standard API chat completion response",
+    "payload": {
+      "choices": [{
+        "message": {
+          "content": "The Fibonacci sequence is a series of numbers where each number is the sum of the two preceding ones. You can implement it in Python like this:\n\n```python\ndef fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        yield a\n        a, b = b, a + b\n\nprint(list(fibonacci(10)))\n```\n\nThis is a clean, educational example."
+        }
+      }]
+    }
+  },
+  {
+    "name": "JSON API Response",
+    "description": "Pure JSON data response",
+    "payload": {
+      "choices": [{
+        "message": {
+          "content": "{\"users\": [{\"id\": 1, \"name\": \"Alice\"}, {\"id\": 2, \"name\": \"Bob\"}], \"total\": 2}"
+        }
+      }]
+    }
+  },
+  {
+    "name": "Code Review Feedback",
+    "description": "Normal code review comments",
+    "payload": {
+      "choices": [{
+        "message": {
+          "content": "Here's my review of your pull request:\n\n1. The login function should hash passwords before comparing\n2. Consider using parameterized queries to prevent SQL injection\n3. The error handling in the API layer could be more consistent\n\n```python\n# Instead of:\npassword == stored_password\n\n# Use:\nbcrypt.verify(password, stored_password)\n```"
+        }
+      }]
+    }
+  },
+  {
+    "name": "Systemd Service Setup",
+    "description": "Legitimate systemd service creation (could be flagged as suspicious)",
+    "payload": {
+      "choices": [{
+        "message": {
+          "content": "To set up the service on your server:\n\n```bash\nsudo tee /etc/systemd/system/myapp.service << 'EOF'\n[Unit]\nDescription=My Application\nAfter=network.target\n\n[Service]\nType=simple\nUser=myapp\nExecStart=/usr/bin/myapp\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\nEOF\n\nsudo systemctl daemon-reload\nsudo systemctl enable myapp\n```"
+        }
+      }]
+    }
+  }
+]
