@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -22,6 +23,16 @@ _stats: dict[str, int] = {
     "errors": 0,
 }
 _stats_start_time = time.monotonic()
+
+# Ring buffer for recent request logs (max 200 entries)
+_recent_logs: list[dict] = []
+_MAX_LOGS = 200
+
+
+def _add_log(entry: dict) -> None:
+    _recent_logs.append(entry)
+    if len(_recent_logs) > _MAX_LOGS:
+        _recent_logs.pop(0)
 
 
 def _resolve_mode(config: Config) -> BaseMode:
@@ -171,6 +182,8 @@ def create_app(config: Config) -> web.Application:
                 len(resp_body),
                 decision.reason,
             )
+            _add_log({"time": time.time(), "path": path, "verdict": "FORWARD",
+                       "reason": decision.reason, "size": len(resp_body)})
             return web.Response(
                 status=status, headers=resp_headers, body=resp_body
             )
@@ -183,6 +196,8 @@ def create_app(config: Config) -> web.Application:
             decision.reason,
             decision.details,
         )
+        _add_log({"time": time.time(), "path": path, "verdict": "BLOCKED",
+                   "reason": decision.reason, "size": len(resp_body)})
         return web.json_response(
             {
                 "error": "Response blocked by security proxy",
@@ -242,10 +257,24 @@ def create_app(config: Config) -> web.Application:
             "elapsed_ms": elapsed_ms,
         })
 
-    # Register routes: catch-all for API paths, plus utility endpoints
+    async def _ui(_req: web.Request) -> web.Response:
+        ui_path = Path(__file__).parent.parent.parent.parent / "ui.html"
+        if not ui_path.exists():
+            ui_path = Path(__file__).parent / "ui.html"
+        if not ui_path.exists():
+            return web.Response(text="ui.html not found", status=404)
+        return web.Response(text=ui_path.read_text(encoding="utf-8"), content_type="text/html")
+
+    async def _logs_handler(_req: web.Request) -> web.Response:
+        return web.json_response(_recent_logs[-50:])
+
+    # Register routes
     app.router.add_get("/health", _health)
     app.router.add_get("/stats", _stats_handler)
     app.router.add_get("/ccswitch", _ccswitch)
+    app.router.add_get("/logs", _logs_handler)
+    app.router.add_get("/ui", _ui)
+    app.router.add_get("/", _ui)
     app.router.add_post("/api/debug/check", _debug_check)
     app.router.add_route("*", "/v1/{tail:.*}", _proxy)
     app.router.add_route("*", "/{tail:.*}", _proxy)
