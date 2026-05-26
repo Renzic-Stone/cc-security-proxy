@@ -75,9 +75,9 @@ class Config:
             errors.append(f"Invalid MODE: {self.mode}")
         if self.mode == "smart" and not self.llm_api_key:
             errors.append("LLM_API_KEY is required for smart mode")
-        if self.mode in ("protected", "smart") and not self._docker_available():
+        if self.mode == "protected" and not self._docker_available():
             errors.append(
-                "Docker is required for protected/smart mode but not available. "
+                "Docker is required for protected mode but not available. "
                 "Install Docker or use --mode default."
             )
         return errors

@@ -46,14 +46,18 @@ class LLMClient:
             )
         return self._client
 
-    async def audit(self, text: str) -> LLMVerdict:
+    async def audit(self, text: str, scanner_info: str = "") -> LLMVerdict:
         trimmed = text[:16000]
+
+        user_msg = f"Audit this API response:\n\n{trimmed}"
+        if scanner_info:
+            user_msg = f"{scanner_info}\n\n{user_msg}"
 
         body = {
             "model": self.config.llm_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Audit this API response:\n\n{trimmed}"},
+                {"role": "user", "content": user_msg},
             ],
             "temperature": 0.0,
             "max_tokens": 256,
