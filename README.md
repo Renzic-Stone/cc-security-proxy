@@ -80,7 +80,7 @@ LLM_MODEL=gpt-4o-mini
 如果你的 LLM 供应商不是 OpenAI（比如你用 DeepSeek、Qwen 等国产模型），改 `LLM_BASE_URL` 就行：
 ```env
 LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-v4-flash
 ```
 
 ### 启动
