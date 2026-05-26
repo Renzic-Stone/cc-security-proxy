@@ -63,6 +63,29 @@ def _walk(obj: object, texts: list[str]) -> None:
             _walk(item, texts)
 
 
+def _extract_user_prompt(body: bytes) -> str:
+    """Extract the user's last message from a chat completion request body.
+
+    Privacy: truncated to 2000 chars, never logged or persisted.
+    Returns empty string on parse failure.
+    """
+    try:
+        data = json.loads(body)
+        messages = data.get("messages", [])
+        if messages:
+            last = messages[-1]
+            content = last.get("content", "")
+            if isinstance(content, str):
+                return content[:2000]
+            if isinstance(content, list):
+                # Multimodal content: extract text parts
+                parts = [p.get("text", "") for p in content if isinstance(p, dict)]
+                return " ".join(parts)[:2000]
+        return ""
+    except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+        return ""
+
+
 def _make_deep_link(port: int) -> str:
     """Generate a CC Switch deep link to import this proxy as a provider."""
     provider_config = {
@@ -126,10 +149,13 @@ def create_app(config: Config) -> web.Application:
                 {"error": f"upstream request failed: {exc}"}, status=502
             )
 
+        # Extract user intent from request body BEFORE forwarding
+        user_prompt = _extract_user_prompt(body)
+
         # Run security check on response body
         text_content = _extract_text_from_response(resp_body)
         try:
-            decision = await mode.check(path, resp_body, text_content)
+            decision = await mode.check(path, resp_body, text_content, user_prompt=user_prompt)
         except Exception as exc:
             logger.error("security check failed: %s", exc)
             _stats["forwarded"] += 1
@@ -189,13 +215,14 @@ def create_app(config: Config) -> web.Application:
             return web.json_response({"error": "body must be a JSON string or object"}, status=400)
 
         text_content = _extract_text_from_response(raw_body_bytes)
+        user_prompt = data.get("user_prompt", "")
         from .scanner import scan, max_severity
 
         matches = scan(text_content)
         t0 = time.monotonic()
 
         try:
-            decision = await mode.check("/v1/chat/completions", raw_body_bytes, text_content)
+            decision = await mode.check("/v1/chat/completions", raw_body_bytes, text_content, user_prompt=user_prompt)
         except Exception as exc:
             decision = type("Decision", (), {"action": "error", "reason": str(exc), "details": "", "confidence": 0})()
 

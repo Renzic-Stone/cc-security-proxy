@@ -11,7 +11,7 @@ logger = logging.getLogger("cc-security-proxy.mode.default")
 class DefaultMode(BaseMode):
     name = "default"
 
-    async def check(self, path: str, raw_body: bytes, text: str) -> Decision:
+    async def check(self, path: str, raw_body: bytes, text: str, user_prompt: str = "") -> Decision:
         matches = scan(text)
         if matches:
             severity = max_severity(matches)

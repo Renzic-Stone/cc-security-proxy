@@ -27,7 +27,7 @@ class ProtectedMode(BaseMode):
             self._executor = SandboxExecutor(self.config)
         return self._executor
 
-    async def check(self, path: str, raw_body: bytes, text: str) -> Decision:
+    async def check(self, path: str, raw_body: bytes, text: str, user_prompt: str = "") -> Decision:
         # Step 1: Fast static scan
         matches = scan(text)
         severity = max_severity(matches)
