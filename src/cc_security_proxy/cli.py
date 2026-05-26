@@ -4,6 +4,7 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 
 try:
     from . import __version__
@@ -39,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ccswitch",
         action="store_true",
         help="Print CC Switch deep link URL for one-click provider import, then exit",
+    )
+    p.add_argument(
+        "-d", "--dashboard",
+        action="store_true",
+        help="Launch terminal dashboard (Rich TUI) instead of plain logging",
     )
     return p
 
@@ -81,6 +87,50 @@ def main() -> None:
     except ImportError:
         from cc_security_proxy.proxy import run_proxy
 
+    dashboard_mode = getattr(args, "dashboard", False)
+
+    if dashboard_mode:
+        # Start proxy in background thread, TUI in main thread
+        logger.info("starting proxy in background (dashboard mode)")
+
+        def _run_proxy() -> None:
+            try:
+                run_proxy(config)
+            except OSError as e:
+                logger.error("failed to bind: %s", e)
+                return
+
+        thread = threading.Thread(target=_run_proxy, daemon=True)
+        thread.start()
+
+        # Wait for server to be ready
+        import time
+        import urllib.request
+
+        for _ in range(10):
+            time.sleep(0.5)
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{config.proxy_port}/health", timeout=2)
+                break
+            except Exception:
+                pass
+        else:
+            logger.error("server failed to start within 5 seconds")
+            sys.exit(1)
+
+        try:
+            from .dashboard import run_dashboard
+        except ImportError:
+            from cc_security_proxy.dashboard import run_dashboard
+
+        try:
+            run_dashboard(config)
+        except KeyboardInterrupt:
+            pass
+        logger.info("shutdown complete")
+        return
+
+    # Normal mode: run proxy in foreground
     loop_holder: list[object] = []
 
     def _shutdown(signum: int, frame: object) -> None:
