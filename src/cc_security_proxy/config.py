@@ -43,7 +43,10 @@ class Config:
         _load_env_file()
 
         def _get(key: str, default: object = "") -> object:
-            return overrides.get(key, os.getenv(key, default))
+            # overrides use lowercase keys (from CLI), env uses UPPERCASE
+            if key.lower() in overrides:
+                return overrides[key.lower()]
+            return os.getenv(key, default)
 
         def _int(key: str, default: int) -> int:
             v = overrides.get(key, os.getenv(key))
@@ -53,7 +56,7 @@ class Config:
             proxy_host=str(_get("PROXY_HOST", "127.0.0.1")),
             proxy_port=_int("PROXY_PORT", 8080),
             upstream_url=str(_get("UPSTREAM_URL", "")),
-            mode=Mode(str(_get("MODE", "smart"))),
+            mode=str(_get("MODE", "smart")),  # type: ignore[arg-type]
             log_level=str(_get("LOG_LEVEL", "INFO")),
             llm_api_key=str(_get("LLM_API_KEY", "")),
             llm_base_url=str(_get("LLM_BASE_URL", "https://api.openai.com/v1")),

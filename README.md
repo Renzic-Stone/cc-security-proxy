@@ -166,6 +166,8 @@ Coding Agent ──POST /v1/chat/completions──▶ CC Security Proxy :8080
 |------|------|
 | `GET /health` | 代理状态、当前模式、上游地址、统计 |
 | `GET /stats` | 请求总数/放行/拦截/错误计数 |
+| `GET /ccswitch` | 返回 CC Switch 深链接，用于一键导入供应商 |
+| `POST /api/debug/check` | 调试接口：传入响应体，返回安全判断结果 |
 | `POST /v1/*` | API 透传（支持所有 HTTP 方法） |
 | `* /*` | 兜底透传 |
 
@@ -175,6 +177,44 @@ Coding Agent ──POST /v1/chat/completions──▶ CC Security Proxy :8080
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
+
+## 配合 CC Switch 使用
+
+[CC Switch](https://github.com/farion1231/cc-switch) 是 Claude Code 生态的供应商管理工具（60k+ stars），可一键切换 API 供应商。CC Security Proxy 支持通过深链接一键导入为 CC Switch 供应商。
+
+### 方法一：深链接导入
+
+```bash
+# 打印深链接 URL
+cc-security-proxy --ccswitch
+```
+
+或启动代理后访问 `http://127.0.0.1:8080/ccswitch` 获取深链接。
+
+点击深链接（或在浏览器地址栏粘贴），CC Switch 会自动弹出导入确认对话框。确认后即可在 CC Switch 中看到 "CC Security Proxy" 供应商。
+
+### 方法二：手动配置
+
+在 CC Switch 中添加自定义供应商：
+- **名称**：CC Security Proxy
+- **端点**：`http://127.0.0.1:8080`
+- **API Key**：填你的上游中转站 API key（代理会原样转发给上游）
+
+### 使用流程
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
+│  CC Switch   │────▶│ CC Security Proxy│────▶│  上游中转站   │
+│ (管理供应商)  │     │ (:8080 安全过滤)  │     │ (实际 API)   │
+└─────────────┘     └──────────────────┘     └─────────────┘
+```
+
+1. 启动 CC Security Proxy：`cc-security-proxy --mode smart --upstream https://你的中转站地址`
+2. 在 CC Switch 中切换到 "CC Security Proxy" 供应商
+3. Claude Code 的请求自动经过安全代理 → 上游中转站
+4. 恶意响应被拦截，安全响应正常返回
+
+切换回其他供应商即可绕过代理，不影响正常使用。
 
 ## 配置参考
 

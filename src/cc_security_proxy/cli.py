@@ -5,8 +5,12 @@ import logging
 import signal
 import sys
 
-from . import __version__
-from .config import Config
+try:
+    from . import __version__
+    from .config import Config
+except ImportError:
+    from cc_security_proxy import __version__
+    from cc_security_proxy.config import Config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--llm-model", help="LLM model name (or $LLM_MODEL)")
     p.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Log level")
+    p.add_argument(
+        "--ccswitch",
+        action="store_true",
+        help="Print CC Switch deep link URL for one-click provider import, then exit",
+    )
     return p
 
 
@@ -48,6 +57,12 @@ def main() -> None:
 
     config = Config.from_env(**overrides_renamed)
 
+    if getattr(args, "ccswitch", False):
+        from .handler import _make_deep_link
+
+        print(_make_deep_link(config.proxy_port))
+        return
+
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -61,7 +76,10 @@ def main() -> None:
             logger.error(e)
         sys.exit(1)
 
-    from .proxy import run_proxy
+    try:
+        from .proxy import run_proxy
+    except ImportError:
+        from cc_security_proxy.proxy import run_proxy
 
     loop_holder: list[object] = []
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -77,6 +78,12 @@ class SandboxExecutor:
             self._docker = docker.DockerClient(base_url=self.config.docker_host)
         return self._docker
 
+    @staticmethod
+    def _dockerfile_dir() -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys._MEIPASS) / "sandbox"
+        return Path(__file__).parent
+
     def available(self) -> bool:
         try:
             self.docker.ping()
@@ -87,7 +94,7 @@ class SandboxExecutor:
     def ensure_image(self) -> None:
         import docker
 
-        dockerfile_dir = Path(__file__).parent
+        dockerfile_dir = self._dockerfile_dir()
         try:
             self.docker.images.get(self.config.sandbox_image)
             logger.debug("sandbox image %s already exists", self.config.sandbox_image)

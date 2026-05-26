@@ -13,10 +13,8 @@ RUN apk add --no-cache \
 RUN adduser -D -s /bin/bash sandbox
 
 RUN mkdir -p /sandbox && chown sandbox:sandbox /sandbox
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 WORKDIR /sandbox
 USER sandbox
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "-c"]
