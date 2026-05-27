@@ -258,9 +258,7 @@ def create_app(config: Config) -> web.Application:
         })
 
     async def _ui(_req: web.Request) -> web.Response:
-        ui_path = Path(__file__).parent.parent.parent.parent / "ui.html"
-        if not ui_path.exists():
-            ui_path = Path(__file__).parent / "ui.html"
+        ui_path = Path(__file__).parent / "ui.html"
         if not ui_path.exists():
             return web.Response(text="ui.html not found", status=404)
         return web.Response(text=ui_path.read_text(encoding="utf-8"), content_type="text/html")

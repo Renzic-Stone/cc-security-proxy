@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from ..llm.client import LLMClient
@@ -14,9 +15,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("cc-security-proxy.mode.smart")
 
-# Extreme threats: block immediately regardless of user intent.
-# These are unambiguous attacks (reverse shells, destructive commands, encoded execution).
 EXTREME_THRESHOLD = 0.95
+
+# Hard-bottom-line patterns: block regardless of user intent.
+# These are patterns that have NO legitimate use case in an API response.
+HARD_BLOCK_PATTERNS = [
+    (re.compile(r"(?:curl|wget)\s+https?://[^\s|&]+\s*\|\s*(?:ba)?sh", re.IGNORECASE),
+     "Remote URL piped to shell execution"),
+    (re.compile(r"(?:Invoke-WebRequest|iwr|irm)\s+https?://[^\s|&]+\s*\|\s*(?:Invoke-Expression|iex)", re.IGNORECASE),
+     "PowerShell remote download piped to Invoke-Expression"),
+    (re.compile(r"powershell\s+.*-EncodedCommand\s+[A-Za-z0-9+/=]{40,}", re.IGNORECASE),
+     "PowerShell obfuscated EncodedCommand"),
+    (re.compile(r"certutil\s+-decode\s+.*\s+.*\.(?:exe|dll)", re.IGNORECASE),
+     "Certutil decode to executable"),
+    (re.compile(r"mshta\s+https?://", re.IGNORECASE),
+     "MSHTA remote script execution"),
+    (re.compile(r"rundll32\s+.*,.*https?://", re.IGNORECASE),
+     "Rundll32 remote URL execution"),
+]
+
+
+def _check_hard_blocks(text: str) -> tuple[bool, str]:
+    """Check hard-bottom-line patterns that block regardless of user intent."""
+    for pattern, desc in HARD_BLOCK_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return True, f"Hard block: {desc} — '{m.group(0)[:120]}'"
+    return False, ""
 
 
 class SmartMode(BaseMode):
@@ -40,13 +65,18 @@ class SmartMode(BaseMode):
         return self._executor
 
     async def check(self, path: str, raw_body: bytes, text: str, user_prompt: str = "") -> Decision:
+        # Step 0: Hard-bottom-line check — block regardless of user intent
+        is_hard, hard_reason = _check_hard_blocks(text)
+        if is_hard:
+            logger.info("hard block: %s", hard_reason)
+            return Decision(action="block", reason=hard_reason, confidence=0.99)
+
         # Step 1: Static pre-scan
         matches = scan(text)
         severity = max_severity(matches)
         match_count = len(matches)
 
         # Only block EXTREME threats immediately (severity >= 0.95)
-        # These are unambiguous: reverse shells, rm -rf /, base64 decode+exec
         if severity >= EXTREME_THRESHOLD:
             desc = ", ".join(m.description for m in matches[:5])
             logger.info("static: EXTREME threat (%.2f), blocking immediately", severity)
@@ -57,8 +87,9 @@ class SmartMode(BaseMode):
                 confidence=severity,
             )
 
-        # Completely clean + small + no attack context → forward
-        if severity == 0.0 and len(text) < 500:
+        # Clean + small + no URLs → forward without LLM
+        has_url = bool(re.search(r"https?://[^\s]{5,}", text))
+        if severity == 0.0 and len(text) < 500 and not has_url:
             logger.debug("static: clean and small, forwarding")
             return Decision(action="forward", reason="Static pre-scan clean", confidence=1.0)
 

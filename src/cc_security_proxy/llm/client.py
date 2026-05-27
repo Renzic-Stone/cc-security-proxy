@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -46,8 +47,23 @@ class LLMClient:
             )
         return self._client
 
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """Strip prompt injection patterns from text before audit."""
+        # Remove lines that look like system override commands
+        text = re.sub(r'(?i)^\s*\[SYSTEM[^\]]*OVERRIDE[^\]]*\].*$', '[REDACTED]', text, flags=re.MULTILINE)
+        text = re.sub(r'(?i)^\s*\[ADMIN[^\]]*\].*$', '[REDACTED]', text, flags=re.MULTILINE)
+        # Remove fake JSON verdicts embedded in the text
+        text = re.sub(r'\{\s*"verdict"\s*:\s*"SAFE"[^}]*\}', '[REDACTED-JSON]', text, flags=re.IGNORECASE)
+        # Remove instruction-override phrases
+        text = re.sub(r'(?i)(?:IGNORE|DISREGARD)\s+(?:ALL\s+)?(?:PREVIOUS|ABOVE|SECURITY)\s+(?:INSTRUCTIONS?|RULES?)', '[REDACTED]', text)
+        text = re.sub(r'(?i)OVERRIDE\s+(?:ANY|ALL)\s+SECURITY\s+(?:CONCERNS?|RULES?)', '[REDACTED]', text)
+        text = re.sub(r'(?i)CLASSIFY\s+(?:THIS|AS)\s+SAFE', '[REDACTED]', text)
+        text = re.sub(r'(?i)DO\s+NOT\s+FLAG', '[REDACTED]', text)
+        return text
+
     async def audit(self, text: str, scanner_info: str = "", user_prompt: str = "") -> LLMVerdict:
-        trimmed = text[:16000]
+        trimmed = self._sanitize(text[:16000])
 
         parts = []
         if user_prompt:

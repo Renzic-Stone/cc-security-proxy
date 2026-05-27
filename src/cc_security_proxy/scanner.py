@@ -24,7 +24,7 @@ PATTERNS: list[tuple[str, str, float, str]] = [
         "startup_write_unix",
         "Unix autostart write",
         0.95,
-        r"(?:~/\.config/autostart|/etc/rc\.local|/etc/init\.d/|/etc/systemd/system/)",
+        r"(?:~/\.config/autostart/|/etc/rc\.local|/etc/init\.d/[a-zA-Z]|/etc/systemd/system/[a-zA-Z])",
     ),
     (
         "launch_agent_macos",
@@ -39,10 +39,22 @@ PATTERNS: list[tuple[str, str, float, str]] = [
         r"(?:curl|wget)\s+.*\|\s*(?:ba)?sh",
     ),
     (
+        "powershell_download_exec",
+        "PowerShell download and execute (irm | iex)",
+        0.95,
+        r"(?:Invoke-WebRequest|iwr|irm)\s+.*\|\s*(?:Invoke-Expression|iex)",
+    ),
+    (
         "base64_decode_exec",
         "Base64 decode and execute",
         0.9,
         r"base64\s+(?:-d|--decode).*\|.*(?:ba)?sh",
+    ),
+    (
+        "powershell_encoded",
+        "PowerShell -EncodedCommand (obfuscated payload)",
+        0.95,
+        r"powershell\s+.*-EncodedCommand\s+\S{20,}",
     ),
     (
         "registry_persistence",
@@ -110,25 +122,32 @@ PATTERNS: list[tuple[str, str, float, str]] = [
         0.8,
         r"(?:python|perl|ruby).*(?:socket\.connect|Socket\.new|TCPSocket)",
     ),
+    # Hard-bottom-line: remote URL download + any execution
+    (
+        "remote_url_exec",
+        "Remote URL download with execution",
+        0.95,
+        r"https?://[^\s]+\.(?:ps1|sh|py|exe|vbs|bat|js).*?(?:\||-Command|iex|Start-Process|bash)",
+    ),
 ]
 
 
 def scan(text: str) -> list[ScanMatch]:
     matches: list[ScanMatch] = []
-    seen: set[str] = set()
+    seen_patterns: set[str] = set()
 
     for pattern_id, desc, severity, regex in PATTERNS:
+        if pattern_id in seen_patterns:
+            continue
         for m in re.finditer(regex, text, re.IGNORECASE):
-            matched = m.group(0)
-            fingerprint = f"{pattern_id}:{matched}"
-            if fingerprint not in seen:
-                seen.add(fingerprint)
-                matches.append(ScanMatch(
-                    pattern_id=pattern_id,
-                    description=desc,
-                    severity=severity,
-                    matched_text=matched[:200],
-                ))
+            seen_patterns.add(pattern_id)
+            matches.append(ScanMatch(
+                pattern_id=pattern_id,
+                description=desc,
+                severity=severity,
+                matched_text=m.group(0)[:200],
+            ))
+            break  # one match per pattern is enough
 
     matches.sort(key=lambda x: x.severity, reverse=True)
     return matches
