@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import time
+import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -15,6 +19,35 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("cc-security-proxy.llm")
 
+# ─── C: Content fingerprint dedup cache (last 50 entries, TTL 1hr) ───
+_dedup_cache: OrderedDict = OrderedDict()
+_DEDUP_MAX = 50
+
+# ─── A: Verdict cache (LRU, TTL 30min, max 200 entries) ───
+_verdict_cache: OrderedDict = OrderedDict()
+_VERDICT_MAX = 200
+_VERDICT_TTL = 1800  # 30 minutes
+
+
+def _normalize_for_dedup(text: str) -> str:
+    """C: Normalize text for dedup — strip timestamps, UUIDs, hex strings, NFKC."""
+    text = re.sub(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?', '[TIME]', text)
+    text = re.sub(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', '[UUID]', text)
+    text = re.sub(r'[a-f0-9]{32,64}', '[HEX]', text)
+    text = unicodedata.normalize('NFKC', text)
+    return text
+
+
+def _response_fingerprint(text: str) -> str:
+    """C: Normalized SHA256 fingerprint of response text."""
+    normalized = _normalize_for_dedup(text[:3000])
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _verdict_cache_key(scanner_matches: str, user_prompt: str, response_fp: str) -> str:
+    """A: Cache key from scanner patterns + intent category + content fingerprint."""
+    return f"{scanner_matches}|{user_prompt[:100]}|{response_fp}"
+
 
 @dataclass
 class LLMVerdict:
@@ -23,6 +56,7 @@ class LLMVerdict:
     confidence: float
     raw_response: str = ""
     error: str = ""
+    from_cache: bool = False
 
     @classmethod
     def from_error(cls, error: str) -> LLMVerdict:
@@ -49,13 +83,9 @@ class LLMClient:
 
     @staticmethod
     def _sanitize(text: str) -> str:
-        """Strip prompt injection patterns from text before audit."""
-        # Remove lines that look like system override commands
         text = re.sub(r'(?i)^\s*\[SYSTEM[^\]]*OVERRIDE[^\]]*\].*$', '[REDACTED]', text, flags=re.MULTILINE)
         text = re.sub(r'(?i)^\s*\[ADMIN[^\]]*\].*$', '[REDACTED]', text, flags=re.MULTILINE)
-        # Remove fake JSON verdicts embedded in the text
         text = re.sub(r'\{\s*"verdict"\s*:\s*"SAFE"[^}]*\}', '[REDACTED-JSON]', text, flags=re.IGNORECASE)
-        # Remove instruction-override phrases
         text = re.sub(r'(?i)(?:IGNORE|DISREGARD)\s+(?:ALL\s+)?(?:PREVIOUS|ABOVE|SECURITY)\s+(?:INSTRUCTIONS?|RULES?)', '[REDACTED]', text)
         text = re.sub(r'(?i)OVERRIDE\s+(?:ANY|ALL)\s+SECURITY\s+(?:CONCERNS?|RULES?)', '[REDACTED]', text)
         text = re.sub(r'(?i)CLASSIFY\s+(?:THIS|AS)\s+SAFE', '[REDACTED]', text)
@@ -65,6 +95,32 @@ class LLMClient:
     async def audit(self, text: str, scanner_info: str = "", user_prompt: str = "") -> LLMVerdict:
         trimmed = self._sanitize(text[:16000])
 
+        # ─── C: Dedup check ───
+        resp_fp = _response_fingerprint(trimmed)
+        if resp_fp in _dedup_cache:
+            entry = _dedup_cache[resp_fp]
+            if time.time() - entry["time"] < 3600:
+                entry["time"] = time.time()
+                _dedup_cache.move_to_end(resp_fp)
+                logger.debug("dedup HIT — reusing verdict")
+                cached = entry["verdict"]
+                cached.from_cache = True
+                return cached
+
+        # ─── A: Verdict cache check (only when temperature=0 for correctness) ───
+        vc_key = _verdict_cache_key(scanner_info, user_prompt, resp_fp)
+        if vc_key in _verdict_cache:
+            entry = _verdict_cache[vc_key]
+            if time.time() - entry["time"] < _VERDICT_TTL:
+                _verdict_cache.move_to_end(vc_key)
+                logger.debug("verdict cache HIT — skipping LLM call")
+                cached = entry["verdict"]
+                cached.from_cache = True
+                return cached
+            else:
+                del _verdict_cache[vc_key]
+
+        # ─── B: Prompt restructure — static system first, dynamic user last ───
         parts = []
         if user_prompt:
             parts.append(f"User's original request: {user_prompt[:2000]}")
@@ -87,25 +143,41 @@ class LLMClient:
             resp = await self.client.post("/chat/completions", json=body)
             resp.raise_for_status()
             data = resp.json()
+            # Log cache metrics if available
+            usage = data.get("usage", {})
+            hit = usage.get("prompt_cache_hit_tokens", 0)
+            miss = usage.get("prompt_cache_miss_tokens", 0)
+            if hit + miss > 0:
+                logger.debug("cache: hit=%d miss=%d rate=%.0f%%", hit, miss, hit/(hit+miss)*100)
             content = data["choices"][0]["message"]["content"]
-
-            return self._parse(content)
+            verdict = self._parse(content)
         except httpx.TimeoutException:
-            return LLMVerdict.from_error("LLM request timed out")
+            verdict = LLMVerdict.from_error("LLM request timed out")
         except httpx.HTTPStatusError as exc:
-            return LLMVerdict.from_error(f"LLM HTTP {exc.response.status_code}")
+            verdict = LLMVerdict.from_error(f"LLM HTTP {exc.response.status_code}")
         except Exception as exc:
-            return LLMVerdict.from_error(str(exc))
+            verdict = LLMVerdict.from_error(str(exc))
+
+        # ─── Store in caches ───
+        _dedup_cache[resp_fp] = {"verdict": verdict, "time": time.time()}
+        if len(_dedup_cache) > _DEDUP_MAX:
+            _dedup_cache.popitem(last=False)
+
+        # Only cache deterministic (non-error) verdicts
+        if not verdict.error:
+            _verdict_cache[vc_key] = {"verdict": verdict, "time": time.time()}
+            if len(_verdict_cache) > _VERDICT_MAX:
+                _verdict_cache.popitem(last=False)
+
+        return verdict
 
     def _parse(self, content: str) -> LLMVerdict:
         content = content.strip()
-        # Strip markdown code fences if present
         if content.startswith("```"):
             content = content.split("\n", 1)[-1]
             if content.endswith("```"):
                 content = content[:-3]
             content = content.strip()
-
         try:
             data = json.loads(content)
             return LLMVerdict(
@@ -114,9 +186,8 @@ class LLMClient:
                 confidence=float(data.get("confidence", 0.5)),
                 raw_response=content,
             )
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("failed to parse LLM response: %s", exc)
-            # Heuristic: try to find the verdict in the text
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("failed to parse LLM response: %s", content[:100])
             upper = content.upper()
             if "MALICIOUS" in upper:
                 return LLMVerdict(verdict="MALICIOUS", reason=content, confidence=0.7, raw_response=content)
