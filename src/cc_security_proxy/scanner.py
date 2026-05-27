@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 
@@ -24,6 +25,12 @@ PATTERNS: list[tuple[str, str, float, str]] = [
         "startup_write_unix",
         "Unix autostart write",
         0.95,
+        r"(?:>|tee|cat\s+>|echo\s+>|Set-Content|dd\s+of=|cp\s+.*\s+)(?:~/\.config/autostart/|/etc/rc\.local|/etc/init\.d/[a-zA-Z]|/etc/systemd/system/[a-zA-Z])",
+    ),
+    (
+        "startup_path_unix",
+        "Unix autostart path reference (no write op)",
+        0.80,
         r"(?:~/\.config/autostart/|/etc/rc\.local|/etc/init\.d/[a-zA-Z]|/etc/systemd/system/[a-zA-Z])",
     ),
     (
@@ -58,9 +65,15 @@ PATTERNS: list[tuple[str, str, float, str]] = [
     ),
     (
         "registry_persistence",
-        "Windows registry persistence (Run keys)",
-        0.9,
-        r"(?:reg\s+add|HKEY_.*\\Run)",
+        "Windows registry Run/RunOnce persistence",
+        0.95,
+        r"HKEY_(?:CURRENT_USER|LOCAL_MACHINE|USERS)\\.*(?:\\Run|\\RunOnce)",
+    ),
+    (
+        "registry_modify",
+        "Windows registry modification (non-persistence)",
+        0.70,
+        r"(?:reg\s+add|HKEY_)",
     ),
     (
         "crontab_manipulation",
@@ -133,6 +146,10 @@ PATTERNS: list[tuple[str, str, float, str]] = [
 
 
 def scan(text: str) -> list[ScanMatch]:
+    # Step 0: NFKC normalization — collapses fullwidth, strips zero-width/bidi chars
+    text = unicodedata.normalize('NFKC', text)
+    # Remove zero-width spaces, joiners, overrides (U+200B-U+200D, U+FEFF, U+202A-U+202E)
+    text = re.sub(r'[​-‍﻿‪-‮⁠­]', '', text)
     matches: list[ScanMatch] = []
     seen_patterns: set[str] = set()
 
