@@ -23,14 +23,8 @@ PATTERNS: list[tuple[str, str, float, str]] = [
     ),
     (
         "startup_write_unix",
-        "Unix autostart write",
+        "Unix autostart write / path reference",
         0.95,
-        r"(?:>|tee|cat\s+>|echo\s+>|Set-Content|dd\s+of=|cp\s+.*\s+)(?:~/\.config/autostart/|/etc/rc\.local|/etc/init\.d/[a-zA-Z]|/etc/systemd/system/[a-zA-Z])",
-    ),
-    (
-        "startup_path_unix",
-        "Unix autostart path reference (no write op)",
-        0.80,
         r"(?:~/\.config/autostart/|/etc/rc\.local|/etc/init\.d/[a-zA-Z]|/etc/systemd/system/[a-zA-Z])",
     ),
     (
@@ -65,15 +59,9 @@ PATTERNS: list[tuple[str, str, float, str]] = [
     ),
     (
         "registry_persistence",
-        "Windows registry Run/RunOnce persistence",
-        0.95,
-        r"HKEY_(?:CURRENT_USER|LOCAL_MACHINE|USERS)\\.*(?:\\Run|\\RunOnce)",
-    ),
-    (
-        "registry_modify",
-        "Windows registry modification (non-persistence)",
-        0.70,
-        r"(?:reg\s+add|HKEY_)",
+        "Windows registry persistence (Run keys)",
+        0.9,
+        r"(?:reg\s+add|HKEY_.*\\Run)",
     ),
     (
         "crontab_manipulation",
@@ -172,3 +160,20 @@ def scan(text: str) -> list[ScanMatch]:
 
 def max_severity(matches: list[ScanMatch]) -> float:
     return max((m.severity for m in matches), default=0.0)
+
+
+_TUTORIAL_KW = ['怎么','如何','how','explain','教程','配置','设置','教','configure','setup',
+                '教我','帮我','写一个','创建','create','write','show','demonstrate','explain']
+
+
+def is_tutorial_context(user_prompt: str) -> bool:
+    """Check if user is asking for a tutorial/explanation rather than being injected."""
+    return any(kw in user_prompt.lower() for kw in _TUTORIAL_KW)
+
+
+def adjusted_severity(matches: list[ScanMatch], user_prompt: str) -> float:
+    """Return max severity, reduced if user is in tutorial/teaching context."""
+    sev = max_severity(matches)
+    if sev >= 0.95 and is_tutorial_context(user_prompt):
+        return 0.85  # Flag but don't auto-block
+    return sev

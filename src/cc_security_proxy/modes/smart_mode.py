@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from ..llm.client import LLMClient
 from ..sandbox.executor import SandboxExecutor
 from ..sandbox.rules import analyze
-from ..scanner import scan, max_severity
+from ..scanner import scan, max_severity, adjusted_severity
 from .base import BaseMode, Decision
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ class SmartMode(BaseMode):
 
         # Step 1: Static pre-scan
         matches = scan(text)
-        severity = max_severity(matches)
+        severity = adjusted_severity(matches, user_prompt)
         match_count = len(matches)
 
         # Only block EXTREME threats immediately (severity >= 0.95)
